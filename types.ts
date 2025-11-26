@@ -2,46 +2,35 @@
 export enum AppState {
   IDLE = 'IDLE',
   TRANSLATING = 'TRANSLATING',
-  REVIEW_SCRIPT = 'REVIEW_SCRIPT',
   GENERATING_AUDIO = 'GENERATING_AUDIO',
   PLAYING = 'PLAYING',
   ERROR = 'ERROR'
 }
 
-export interface ScriptLine {
-  speaker: string;
-  text: string;
+export enum AudioMode {
+  MULTI_CAST = 'MULTI_CAST',
+  SOLO = 'SOLO'
 }
 
-export interface CharacterConfig {
-  name: string;
-  gender: 'male' | 'female';
-  voiceId: string; // ID from the presets (e.g. 'm_01')
-  personality: string; // Custom user input, e.g. "Angry"
+export interface GeneratedScript {
+  originalText: string;
+  hinglishScript: string;
 }
 
-export interface VoicePreset {
-  id: string;
-  label: string; // Display name e.g. "Male 1 - Hero"
-  baseVoice: string; // Actual Gemini API voice name
-  defaultStyle: string; // Default personality prompt
+export interface AudioData {
+  buffer: AudioBuffer;
+  duration: number;
 }
 
-// REDUCED TO 5 HIGH QUALITY STABLE VOICES PER GENDER TO FIX FLOW ISSUES
-// We prioritize "Fenrir" and "Zephyr" for males, "Kore" for females as they are most stable.
+export type VoiceName = 'Puck' | 'Charon' | 'Kore' | 'Fenrir' | 'Zephyr' | 'Aoede';
 
-export const MALE_VOICES: VoicePreset[] = [
-  { id: 'm_01', label: 'Male 1 - Hero (Balanced)', baseVoice: 'Fenrir', defaultStyle: 'Confident, Heroic, Natural Pace' },
-  { id: 'm_02', label: 'Male 2 - Narrator (Deep)', baseVoice: 'Zephyr', defaultStyle: 'Calm, Storyteller, Measured Pace' },
-  { id: 'm_03', label: 'Male 3 - Young/Soft', baseVoice: 'Puck', defaultStyle: 'Soft, Youthful, Natural Pace' },
-  { id: 'm_04', label: 'Male 4 - Elder/Grave', baseVoice: 'Charon', defaultStyle: 'Deep, Grave, Wise, Steady Pace' },
-  { id: 'm_05', label: 'Male 5 - Intense/Villain', baseVoice: 'Fenrir', defaultStyle: 'Intense, Low Pitch, Serious' },
-];
+// Strict lists for validation
+export const MALE_VOICE_NAMES: VoiceName[] = ['Charon', 'Fenrir', 'Puck', 'Zephyr'];
+export const FEMALE_VOICE_NAMES: VoiceName[] = ['Kore', 'Aoede'];
 
-export const FEMALE_VOICES: VoicePreset[] = [
-  { id: 'f_01', label: 'Female 1 - Heroine (Soothing)', baseVoice: 'Kore', defaultStyle: 'Calm, Soothing, Natural Pace' },
-  { id: 'f_02', label: 'Female 2 - Narrator (Clear)', baseVoice: 'Kore', defaultStyle: 'Clear, Professional, Storyteller' },
-  { id: 'f_03', label: 'Female 3 - Warm/Motherly', baseVoice: 'Kore', defaultStyle: 'Warm, Soft, Gentle, Steady Pace' },
-  { id: 'f_04', label: 'Female 4 - Energetic', baseVoice: 'Kore', defaultStyle: 'Bright, Lively, Natural Pace' },
-  { id: 'f_05', label: 'Female 5 - Mysterious', baseVoice: 'Kore', defaultStyle: 'Low Pitch, Whispery, Serious' },
-];
+export interface CastConfig {
+  mode: AudioMode;
+  narrator: VoiceName;
+  hero: VoiceName;
+  heroine: VoiceName;
+}

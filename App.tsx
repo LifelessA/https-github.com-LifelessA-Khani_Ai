@@ -1,8 +1,8 @@
 
 import React, { useState, useRef, useEffect } from 'react';
-import { translateToHinglishScript, generateAudioFromScript, extractUniqueSpeakers } from './services/geminiService';
+import { translateToHinglishScript, generateAudioFromScript } from './services/geminiService';
 import { audioBufferToWav } from './services/audioUtils';
-import { AppState, CharacterConfig, MALE_VOICES, FEMALE_VOICES } from './types';
+import { AppState, CastConfig, VoiceName, AudioMode, MALE_VOICE_NAMES, FEMALE_VOICE_NAMES } from './types';
 import Spinner from './components/Spinner';
 import AudioVisualizer from './components/AudioVisualizer';
 
@@ -31,22 +31,20 @@ const DownloadIcon = () => (
   </svg>
 );
 
-const RefreshIcon = () => (
-  <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5">
-    <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99" />
-  </svg>
-);
-
 const App: React.FC = () => {
   const [inputText, setInputText] = useState('');
   const [script, setScript] = useState('');
   const [appState, setAppState] = useState<AppState>(AppState.IDLE);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   
-  // Character Assignment State
-  const [detectedSpeakers, setDetectedSpeakers] = useState<string[]>([]);
-  const [characterConfigs, setCharacterConfigs] = useState<Record<string, CharacterConfig>>({});
-  
+  // Cast Configuration
+  const [cast, setCast] = useState<CastConfig>({
+    mode: AudioMode.MULTI_CAST,
+    narrator: 'Charon',
+    hero: 'Fenrir',
+    heroine: 'Kore'
+  });
+
   // Audio state
   const audioContextRef = useRef<AudioContext | null>(null);
   const audioBufferRef = useRef<AudioBuffer | null>(null);
@@ -54,141 +52,50 @@ const App: React.FC = () => {
   const [isPlaying, setIsPlaying] = useState(false);
 
   useEffect(() => {
+    // Cleanup audio context on unmount
     return () => {
-      if (sourceNodeRef.current) sourceNodeRef.current.stop();
-      if (audioContextRef.current) audioContextRef.current.close();
+      if (sourceNodeRef.current) {
+        sourceNodeRef.current.stop();
+      }
+      if (audioContextRef.current) {
+        audioContextRef.current.close();
+      }
     };
   }, []);
 
-  // --- Step 1: Generate Script ---
-  const handleGenerateScript = async () => {
+  const handleProcess = async () => {
     if (!inputText.trim()) return;
     
-    // Reset previous audio/data
     if (sourceNodeRef.current) {
       sourceNodeRef.current.stop();
       setIsPlaying(false);
     }
-    audioBufferRef.current = null;
+    
     setErrorMsg(null);
     setAppState(AppState.TRANSLATING);
+    setScript('');
+    audioBufferRef.current = null;
 
     try {
       const hinglishScript = await translateToHinglishScript(inputText);
       setScript(hinglishScript);
-      
-      // Auto-detect characters
-      const speakers = extractUniqueSpeakers(hinglishScript);
-      setDetectedSpeakers(speakers);
-      
-      // Initialize Configs
-      const initialConfigs: Record<string, CharacterConfig> = {};
-      
-      speakers.forEach((speaker) => {
-        const lower = speaker.toLowerCase();
-        let gender: 'male' | 'female' = 'male';
-        let voiceId = MALE_VOICES[0].id;
-        let personality = '';
+      setAppState(AppState.GENERATING_AUDIO);
 
-        if (lower.includes('narrator')) {
-           gender = 'male';
-           voiceId = 'm_02'; // Default Narrator preset (Zephyr)
-        }
-        else if (lower.includes('female') || lower.includes('girl') || lower.includes('woman') || lower.includes('mom') || lower.includes('priya') || lower.includes('lady')) {
-           gender = 'female';
-           voiceId = 'f_01';
-        }
-        else if (lower.includes('old') || lower.includes('grandpa')) {
-           gender = 'male';
-           voiceId = 'm_04'; // Elder
-        }
-        else {
-           gender = 'male';
-           voiceId = 'm_01';
-        }
-
-        initialConfigs[speaker] = {
-          name: speaker,
-          gender,
-          voiceId,
-          personality
-        };
-      });
-      
-      setCharacterConfigs(initialConfigs);
-      setAppState(AppState.REVIEW_SCRIPT);
-    } catch (err: any) {
-      console.error(err);
-      setErrorMsg(err.message || "Script translation failed.");
-      setAppState(AppState.ERROR);
-    }
-  };
-
-  // --- Update Character Config ---
-  const updateCharacter = (name: string, updates: Partial<CharacterConfig>) => {
-    setCharacterConfigs(prev => {
-      const current = prev[name];
-      const newState = { ...current, ...updates };
-
-      // CRITICAL FIX: Smart Voice Selection when Gender Changes
-      if (updates.gender && updates.gender !== current.gender) {
-        const isNarrator = name.toLowerCase().includes('narrator');
-        
-        if (updates.gender === 'male') {
-          // If switching to Male, prioritize "Narrator" voice (m_02) if it's the narrator, else "Hero" (m_01)
-          newState.voiceId = isNarrator ? 'm_02' : MALE_VOICES[0].id;
-        } else {
-          // If switching to Female, prioritize "Narrator" voice (f_02) if it's the narrator, else "Heroine" (f_01)
-          newState.voiceId = isNarrator ? 'f_02' : FEMALE_VOICES[0].id; 
-        }
-      }
-
-      return { ...prev, [name]: newState };
-    });
-  };
-
-  const randomizeVoices = () => {
-    setCharacterConfigs(prev => {
-      const next = { ...prev };
-      Object.keys(next).forEach(key => {
-        if (key.toLowerCase().includes('narrator')) return; // Keep narrator stable
-
-        // Randomize
-        const isMale = Math.random() > 0.4;
-        const gender = isMale ? 'male' : 'female';
-        const list = isMale ? MALE_VOICES : FEMALE_VOICES;
-        const randomVoice = list[Math.floor(Math.random() * list.length)];
-        
-        next[key] = {
-          ...next[key],
-          gender,
-          voiceId: randomVoice.id,
-          personality: ''
-        };
-      });
-      return next;
-    });
-  };
-
-  // --- Step 2: Generate Audio ---
-  const handleGenerateAudio = async () => {
-    if (!script) return;
-    setAppState(AppState.GENERATING_AUDIO);
-
-    try {
-      const audioBuffer = await generateAudioFromScript(script, characterConfigs);
+      const audioBuffer = await generateAudioFromScript(hinglishScript, cast);
       audioBufferRef.current = audioBuffer;
-      setAppState(AppState.IDLE);
-      handlePlay();
+      
+      setAppState(AppState.IDLE); 
+      handlePlay(); 
     } catch (err: any) {
       console.error(err);
-      setErrorMsg("Failed to generate audio. Please try again.");
+      setErrorMsg(err.message || "Something went wrong.");
       setAppState(AppState.ERROR);
     }
   };
 
   const handlePlay = () => {
     if (!audioBufferRef.current) return;
+
     if (isPlaying) {
       if (sourceNodeRef.current) {
         sourceNodeRef.current.stop();
@@ -200,7 +107,10 @@ const App: React.FC = () => {
     if (!audioContextRef.current) {
       audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
     }
-    if (audioContextRef.current.state === 'suspended') audioContextRef.current.resume();
+    
+    if (audioContextRef.current.state === 'suspended') {
+      audioContextRef.current.resume();
+    }
 
     const source = audioContextRef.current.createBufferSource();
     source.buffer = audioBufferRef.current;
@@ -218,214 +128,241 @@ const App: React.FC = () => {
 
   const handleDownload = () => {
     if (!audioBufferRef.current) return;
+    
     try {
       const wavBlob = audioBufferToWav(audioBufferRef.current);
       const url = URL.createObjectURL(wavBlob);
       const a = document.createElement('a');
       a.style.display = 'none';
       a.href = url;
-      a.download = 'kahani_adult_audio_drama.wav';
+      a.download = 'kahani_audiobook.wav';
       document.body.appendChild(a);
       a.click();
+      
       window.setTimeout(() => {
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
       }, 100);
     } catch (e) {
-      setErrorMsg("Download failed.");
+      console.error("Download failed", e);
+      setErrorMsg("Failed to download audio file.");
     }
   };
 
+  const getStatusText = () => {
+    switch(appState) {
+      case AppState.TRANSLATING: return "Translating to Hinglish...";
+      case AppState.GENERATING_AUDIO: return "Casting Voices & Recording...";
+      case AppState.ERROR: return "Error Occurred";
+      default: return "Create Audio Drama";
+    }
+  };
+
+  const VoiceSelector = ({ label, value, onChange, options, disabled }: { label: string, value: VoiceName, onChange: (v: VoiceName) => void, options: {label: string, value: VoiceName}[], disabled?: boolean }) => (
+    <div className={`flex flex-col gap-1 ${disabled ? 'opacity-30 pointer-events-none' : ''}`}>
+      <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider">{label}</label>
+      <select 
+        value={value}
+        onChange={(e) => onChange(e.target.value as VoiceName)}
+        className="bg-background/50 border border-white/10 rounded-md py-2 px-3 text-sm text-white focus:outline-none focus:ring-2 focus:ring-primary/50"
+      >
+        {options.map(opt => (
+          <option key={opt.value} value={opt.value} className="bg-surface text-white">
+            {opt.label}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+
+  const maleVoices: {label: string, value: VoiceName}[] = [
+    { label: 'Charon (Deep/Storyteller)', value: 'Charon' },
+    { label: 'Fenrir (Intense/Heroic)', value: 'Fenrir' },
+    { label: 'Puck (Light/Energetic)', value: 'Puck' },
+    { label: 'Zephyr (Calm/Smooth)', value: 'Zephyr' },
+  ];
+
+  const femaleVoices: {label: string, value: VoiceName}[] = [
+    { label: 'Kore (Balanced/Clear)', value: 'Kore' },
+    { label: 'Aoede (Expressive)', value: 'Aoede' },
+  ];
+
   return (
-    <div className="min-h-screen bg-background text-slate-200 font-sans selection:bg-primary selection:text-white pb-24">
+    <div className="min-h-screen bg-background text-slate-200 font-sans selection:bg-primary selection:text-white pb-12">
       {/* Header */}
-      <header className="border-b border-white/10 bg-surface/50 backdrop-blur-md sticky top-0 z-20">
-        <div className="max-w-5xl mx-auto px-6 py-4 flex items-center gap-3">
+      <header className="border-b border-white/10 bg-surface/50 backdrop-blur-md sticky top-0 z-10">
+        <div className="max-w-4xl mx-auto px-6 py-4 flex items-center gap-3">
           <BookIcon />
           <div>
             <h1 className="text-xl font-bold text-white tracking-tight">Kahani AI</h1>
-            <p className="text-xs text-slate-400">Adult Audio Drama Creator</p>
+            <p className="text-xs text-slate-400">Web Novel to Multi-Cast Audio Drama</p>
           </div>
         </div>
       </header>
 
-      <main className="max-w-5xl mx-auto px-6 py-8 space-y-8">
+      <main className="max-w-4xl mx-auto px-6 py-8 space-y-8">
         
         {/* Intro */}
-        {appState === AppState.IDLE && !script && (
-          <section className="space-y-2 animate-fade-in">
-            <h2 className="text-3xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-primary to-secondary">
-              Create immersive audio stories.
-            </h2>
-            <p className="text-slate-400 max-w-xl">
-              Paste your web novel. We'll translate it, assign a cast, and produce a mature 18+ audio drama.
-            </p>
-          </section>
-        )}
+        <section className="space-y-2">
+          <h2 className="text-3xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-primary to-secondary">
+            Bring your stories to life.
+          </h2>
+          <p className="text-slate-400 max-w-xl">
+            Paste your web novel below. AI will translate it into emotional Hinglish 
+            and enact it using a full cast of characters.
+          </p>
+        </section>
 
-        {/* --- STEP 1: INPUT --- */}
-        <section className={`bg-surface rounded-2xl border border-white/5 p-1 shadow-xl shadow-black/20 transition-all ${script ? 'opacity-80 hover:opacity-100' : ''}`}>
-          <textarea
-            className="w-full h-32 bg-background/50 text-slate-100 p-4 rounded-xl resize-none focus:outline-none focus:ring-2 focus:ring-primary/50 transition-all placeholder-slate-600"
-            placeholder="Paste your novel text here..."
-            value={inputText}
-            onChange={(e) => setInputText(e.target.value)}
-            disabled={appState === AppState.TRANSLATING || appState === AppState.GENERATING_AUDIO}
-          />
-          <div className="p-2 flex justify-end">
-             {(!script || appState === AppState.IDLE) && (
-               <button
-                 onClick={handleGenerateScript}
-                 disabled={!inputText || appState === AppState.TRANSLATING}
-                 className="px-6 py-2 rounded-full font-semibold text-white bg-primary hover:bg-primary/80 transition-all flex items-center gap-2 text-sm disabled:opacity-50"
+        {/* Casting Studio */}
+        <section className="bg-surface rounded-xl border border-white/5 p-6 shadow-lg">
+          <div className="flex items-center justify-between mb-6 border-b border-white/5 pb-4">
+             <h3 className="text-sm font-bold text-white">Audio Production Mode</h3>
+             <div className="flex bg-background/50 p-1 rounded-lg border border-white/10">
+               <button 
+                 onClick={() => setCast({...cast, mode: AudioMode.MULTI_CAST})}
+                 className={`px-4 py-1.5 rounded-md text-xs font-bold transition-all ${cast.mode === AudioMode.MULTI_CAST ? 'bg-primary text-white shadow' : 'text-slate-400 hover:text-white'}`}
                >
-                 {appState === AppState.TRANSLATING ? <Spinner /> : '1. Create Script'}
+                 Multi-Cast Drama
                </button>
+               <button 
+                 onClick={() => setCast({...cast, mode: AudioMode.SOLO})}
+                 className={`px-4 py-1.5 rounded-md text-xs font-bold transition-all ${cast.mode === AudioMode.SOLO ? 'bg-secondary text-white shadow' : 'text-slate-400 hover:text-white'}`}
+               >
+                 Solo Storyteller
+               </button>
+             </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
+            
+            <VoiceSelector 
+              label={cast.mode === AudioMode.SOLO ? "Solo Narrator Voice" : "Narrator"}
+              value={cast.narrator} 
+              onChange={(v) => setCast({...cast, narrator: v})}
+              options={[...maleVoices, ...femaleVoices]}
+            />
+
+            {/* These are hidden in Solo Mode */}
+            <div className={`col-span-1 sm:col-span-2 grid grid-cols-2 gap-6 transition-opacity duration-300 ${cast.mode === AudioMode.SOLO ? 'opacity-20 pointer-events-none blur-[1px]' : 'opacity-100'}`}>
+              <VoiceSelector 
+                label="Hero (Male Lead)" 
+                value={cast.hero} 
+                onChange={(v) => setCast({...cast, hero: v})}
+                options={maleVoices}
+              />
+
+              <VoiceSelector 
+                label="Heroine (Female Lead)" 
+                value={cast.heroine} 
+                onChange={(v) => setCast({...cast, heroine: v})}
+                options={femaleVoices}
+              />
+            </div>
+
+          </div>
+          
+          <div className="mt-4 pt-4 border-t border-white/5 text-xs text-slate-500 flex flex-wrap gap-2">
+             {cast.mode === AudioMode.MULTI_CAST ? (
+               <>
+                <span className="bg-white/5 px-2 py-1 rounded">Side Males will use remaining male voices.</span>
+                <span className="bg-white/5 px-2 py-1 rounded">Side Females will use remaining female voices.</span>
+               </>
+             ) : (
+               <span className="bg-secondary/10 text-secondary px-2 py-1 rounded">Solo Mode: Narrator will automatically modulate voice pitch for Male/Female dialogues.</span>
              )}
           </div>
         </section>
 
-        {/* --- STEP 2: CASTING --- */}
-        {(appState === AppState.REVIEW_SCRIPT || appState === AppState.GENERATING_AUDIO || script) && (
-          <section className="animate-fade-in space-y-6">
-            
-            <div className="flex items-center justify-between">
-              <div>
-                 <h3 className="text-xl font-bold text-white">Cast Your Characters</h3>
-                 <p className="text-xs text-slate-400">Assign specific voices and personalities.</p>
-              </div>
-              <button onClick={randomizeVoices} className="text-xs flex items-center gap-1 text-slate-400 hover:text-white transition-colors bg-white/5 px-3 py-1.5 rounded-full">
-                <RefreshIcon /> Randomize All
-              </button>
-            </div>
+        {/* Input Area */}
+        <section className="bg-surface rounded-2xl border border-white/5 p-1 shadow-xl shadow-black/20">
+          <textarea
+            className="w-full h-48 bg-background/50 text-slate-100 p-4 rounded-xl resize-none focus:outline-none focus:ring-2 focus:ring-primary/50 transition-all placeholder-slate-600"
+            placeholder="Paste your English novel text here... e.g., 'He looked at her with tears in his eyes...'"
+            value={inputText}
+            onChange={(e) => setInputText(e.target.value)}
+            disabled={appState === AppState.TRANSLATING || appState === AppState.GENERATING_AUDIO}
+          />
+        </section>
 
-            <div className="grid grid-cols-1 gap-3">
-              {detectedSpeakers.map((speaker) => {
-                const config = characterConfigs[speaker] || { name: speaker, gender: 'male', voiceId: 'm_01', personality: '' };
-                const isMale = config.gender === 'male';
-                const availableVoices = isMale ? MALE_VOICES : FEMALE_VOICES;
+        {/* Controls */}
+        <section className="flex flex-col sm:flex-row items-center justify-between gap-4">
+          <button
+            onClick={handleProcess}
+            disabled={!inputText || appState === AppState.TRANSLATING || appState === AppState.GENERATING_AUDIO}
+            className={`
+              w-full sm:w-auto px-8 py-3 rounded-full font-semibold text-white shadow-lg transition-all
+              flex items-center justify-center gap-2
+              ${!inputText || appState !== AppState.IDLE && appState !== AppState.ERROR && appState !== AppState.PLAYING
+                ? 'bg-slate-700 cursor-not-allowed opacity-50' 
+                : 'bg-gradient-to-r from-primary to-secondary hover:opacity-90 hover:scale-105'}
+            `}
+          >
+            {(appState === AppState.TRANSLATING || appState === AppState.GENERATING_AUDIO) && <Spinner />}
+            {getStatusText()}
+          </button>
 
-                return (
-                  <div key={speaker} className="bg-surface border border-white/10 p-4 rounded-xl flex flex-col md:flex-row md:items-center gap-4 hover:border-white/20 transition-colors">
-                    
-                    {/* Name */}
-                    <div className="md:w-1/4 flex items-center gap-2">
-                       <div className={`w-2 h-2 rounded-full ${speaker.toLowerCase().includes('narrator') ? 'bg-secondary' : 'bg-primary'}`}></div>
-                       <span className={`font-semibold text-lg truncate ${speaker.toLowerCase().includes('narrator') ? 'text-secondary' : 'text-slate-100'}`}>
-                        {speaker}
-                      </span>
-                    </div>
-
-                    {/* Gender Switch */}
-                    <div className="flex bg-black/40 rounded-lg p-1 text-xs font-bold border border-white/5">
-                      <button 
-                        onClick={() => updateCharacter(speaker, { gender: 'male' })}
-                        className={`px-3 py-1.5 rounded ${isMale ? 'bg-primary text-white shadow' : 'text-slate-500 hover:text-slate-300'}`}
-                      >
-                        Male
-                      </button>
-                      <button 
-                        onClick={() => updateCharacter(speaker, { gender: 'female' })}
-                        className={`px-3 py-1.5 rounded ${!isMale ? 'bg-secondary text-white shadow' : 'text-slate-500 hover:text-slate-300'}`}
-                      >
-                        Female
-                      </button>
-                    </div>
-
-                    {/* Voice Select */}
-                    <div className="flex-1">
-                      <select
-                        className="w-full bg-black/40 text-sm text-slate-300 border border-white/10 rounded-lg px-3 py-2 focus:border-primary focus:outline-none transition-colors cursor-pointer hover:bg-black/60"
-                        value={config.voiceId}
-                        onChange={(e) => updateCharacter(speaker, { voiceId: e.target.value })}
-                      >
-                        {availableVoices.map(v => (
-                          <option key={v.id} value={v.id}>
-                            {v.label}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-
-                    {/* Personality Input */}
-                    <div className="flex-1">
-                       <input 
-                         type="text"
-                         className="w-full bg-black/40 text-sm text-slate-300 border border-white/10 rounded-lg px-3 py-2 focus:border-primary focus:outline-none placeholder-slate-600 transition-colors hover:bg-black/60"
-                         placeholder="Personality (e.g. Angry, Shy)"
-                         value={config.personality}
-                         onChange={(e) => updateCharacter(speaker, { personality: e.target.value })}
-                       />
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-
-            <div className="flex justify-center pt-8 pb-4">
-              <button
-                onClick={handleGenerateAudio}
-                disabled={appState === AppState.GENERATING_AUDIO}
-                className="w-full sm:w-auto px-12 py-4 rounded-full font-bold text-lg text-white shadow-xl bg-gradient-to-r from-secondary via-pink-600 to-primary hover:scale-105 transition-all flex items-center justify-center gap-3 disabled:opacity-50 disabled:scale-100"
+          {/* Audio Controller */}
+          {audioBufferRef.current && (
+             <div className="flex flex-wrap items-center gap-4 bg-surface px-6 py-2 rounded-full border border-white/10 animate-fade-in w-full sm:w-auto justify-center">
+               <button 
+                onClick={handlePlay}
+                className="text-white hover:text-primary transition-colors focus:outline-none"
+                title={isPlaying ? "Pause" : "Play"}
               >
-                {appState === AppState.GENERATING_AUDIO ? <Spinner /> : '2. Generate Audio Drama'}
-              </button>
-            </div>
-          </section>
-        )}
-
-        {/* --- AUDIO PLAYER --- */}
-        {audioBufferRef.current && (
-           <section className="bg-surface border border-white/10 rounded-2xl p-6 animate-slide-up sticky bottom-6 shadow-2xl shadow-black z-30">
-             <div className="flex flex-col sm:flex-row items-center gap-6">
-                <button 
-                  onClick={handlePlay}
-                  className="w-16 h-16 flex items-center justify-center bg-white text-background rounded-full hover:scale-110 transition-transform shadow-lg shrink-0"
-                >
-                  {isPlaying ? <PauseIcon /> : <PlayIcon />}
-                </button>
-                
-                <div className="flex-1 w-full space-y-2">
-                  <div className="flex justify-between text-xs text-slate-400 uppercase tracking-widest">
-                    <span>Now Playing</span>
-                    <span className={isPlaying ? "text-primary animate-pulse" : ""}>{isPlaying ? "Active" : "Paused"}</span>
-                  </div>
-                  <AudioVisualizer isPlaying={isPlaying} />
-                </div>
-
-                <button
+                 {isPlaying ? <PauseIcon /> : <PlayIcon />}
+               </button>
+               
+               <AudioVisualizer isPlaying={isPlaying} />
+               
+               <div className="w-[1px] h-8 bg-white/10 mx-2"></div>
+               
+               <button
                  onClick={handleDownload}
-                 className="p-4 text-slate-400 hover:text-white hover:bg-white/10 rounded-full transition-colors shrink-0"
-                 title="Download .WAV"
+                 className="text-slate-400 hover:text-secondary transition-colors focus:outline-none flex items-center gap-2 text-sm font-medium"
+                 title="Download Audiobook"
                >
                  <DownloadIcon />
+                 <span className="hidden sm:inline">Download</span>
                </button>
              </div>
-           </section>
-        )}
+          )}
+        </section>
 
-        {/* --- SCRIPT DISPLAY --- */}
-        {script && (
-          <section className="bg-surface/50 rounded-xl border border-white/5 p-6 h-64 overflow-y-auto font-mono text-sm leading-relaxed scrollbar-thin scrollbar-thumb-white/10">
-             <h4 className="text-xs font-bold text-slate-500 mb-4 sticky top-0 bg-surface/95 backdrop-blur py-2 uppercase">Script Preview</h4>
-             {script.split('\n').map((line, idx) => {
-               if (!line.trim()) return null;
-               const speaker = line.split(':')[0];
-               const isNarrator = speaker === 'Narrator';
-               return (
-                 <div key={idx} className="mb-2">
-                   <span className={`font-bold ${isNarrator ? 'text-secondary' : 'text-primary'}`}>{speaker}:</span>
-                   <span className="text-slate-300 ml-2">{line.replace(`${speaker}:`, '')}</span>
-                 </div>
-               )
-             })}
-          </section>
-        )}
-
+        {/* Error Message */}
         {errorMsg && (
-          <div className="fixed bottom-10 right-10 max-w-sm bg-red-900/90 border border-red-500/50 text-white p-4 rounded-xl shadow-2xl animate-bounce z-50">
+          <div className="bg-red-500/10 border border-red-500/20 text-red-200 p-4 rounded-xl text-center">
             {errorMsg}
           </div>
+        )}
+
+        {/* Output Script Display */}
+        {script && (
+          <section className="space-y-4 animate-fade-in">
+             <div className="flex items-center justify-between">
+                <h3 className="text-lg font-semibold text-white">Generated Hinglish Script</h3>
+                <span className="text-xs px-2 py-1 bg-primary/20 text-primary rounded-md border border-primary/20">Read along</span>
+             </div>
+             
+             <div className="bg-surface rounded-xl border border-white/5 p-6 h-96 overflow-y-auto space-y-4 font-mono text-sm leading-relaxed">
+                {script.split('\n').map((line, idx) => {
+                  const trimmed = line.trim();
+                  if (!trimmed) return null;
+                  
+                  let colorClass = "text-slate-300";
+                  if (trimmed.startsWith('Hero:')) colorClass = "text-blue-400 font-bold";
+                  else if (trimmed.startsWith('Heroine:')) colorClass = "text-pink-400 font-bold";
+                  else if (trimmed.includes('Male_')) colorClass = "text-blue-200";
+                  else if (trimmed.includes('Female_')) colorClass = "text-pink-200";
+                  else if (trimmed.startsWith('Narrator:')) colorClass = "text-emerald-300 italic";
+
+                  return (
+                    <p key={idx} className={`${colorClass} transition-colors hover:bg-white/5 p-1 rounded`}>
+                      {trimmed}
+                    </p>
+                  )
+                })}
+             </div>
+          </section>
         )}
 
       </main>
